@@ -1,0 +1,34 @@
+{
+  "name": "torrente_online_bot",
+  "version": "1.0.0",
+  "description": "conecta un bot a un servidor de torrente online. </br> requisitos: </br> node v20.19.4, </br> node index.js </br>",
+  "homepage": "https://github.com/srXendo/torrente_online_bot#readme",
+  "bugs": {
+    "url": "https://github.com/srXendo/torrente_online_bot/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/srXendo/torrente_online_bot.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "start": "npx electron .",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "proxy": "node proxy.js 2222",
+    "build": "npx electron-packager ./ torrente_online_bot --platform=win32 --arch=x64"
+  },
+  "devDependencies": {
+    "electron": "^40.2.1",
+    "electron-packager": "^17.1.2"
+  },
+  "dependencies": {
+    "three": "^0.183.2",
+    "three-pathfinding": "^1.3.0"
+  }
+}

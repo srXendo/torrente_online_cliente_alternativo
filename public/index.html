@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Torrente online cliente</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        body {
+            margin: 0
+        }
+    </style>
+</head>
+
+<body>
+
+    <script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.168.0/examples/jsm/",
+    "threePathfinding": "https://cdn.jsdelivr.net/npm/three-pathfinding@1.3.0/+esm"
+  }
+}
+</script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+        import { Pathfinding, PathfindingHelper } from 'threePathfinding';
+        import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+
+        const Color = {
+            GROUND:  0x606060,
+            NAVMESH: 0xFFFFFF,
+        };
+
+        let offsetX = 1;
+        let offsetZ = 1;
+        let focus_player = null;
+        document.getElementById('offsetX').setAttribute('value', -3.9);
+        document.getElementById('lx').textContent = offsetX.toFixed(2);
+        document.getElementById('offsetZ').setAttribute('value', -1.6);
+        document.getElementById('lz').textContent = offsetZ.toFixed(2);
+
+        const ZONE  = 'level';
+
+        // --- Umbrales de optimización ---
+        // Solo regenerar path si el jugador se movió más de esta distancia al cuadrado
+        const PATH_REGEN_DIST_SQ  = 0.25; // ~0.5 unidades
+        // Radio al cuadrado para considerar waypoint alcanzado
+        const WAYPOINT_RADIUS_SQ  = 0.09; // ~0.3 unidades
+
+        let navmesh;
+        let groupID, path;
+        let yellowMarker;
+        let botPrototype;
+
+        const players       = {};
+        const botsWaypoints = {};
+        const move_actions  = {
+            camera_right: { action_type: 'camera_right' },
+            camera_left:  { action_type: 'camera_left'  },
+            forward:      { action_type: 'forward_move' },
+            stop_forward: { action_type: 'stop_forward_move' },
+            navmesh_load: { action_type: 'navmesh_load'}
+        };
+
+        const playerPosition      = new THREE.Vector3(-3.5, 0.5, 5.5);
+        // Última posición usada para generar paths (evita regeneraciones innecesarias)
+        const lastPathGenPosition = new THREE.Vector3(Infinity, Infinity, Infinity);
+
+        const targetPosition  = new THREE.Vector3();
+        const wireMaterialBot = new THREE.MeshBasicMaterial({ color: 0x00c8ff, wireframe: true });
+        const pathfinder      = new Pathfinding();
+        const helper          = new PathfindingHelper();
+
+        const SENSOR_DT = 0.1; // 100 ms = 10 Hz
+        let acc = 0;
+        // Round-robin: regeneramos el path de un bot distinto por tick
+        let botRoundRobinIdx = 0;
+
+        const clock     = new THREE.Clock();
+        const mouse     = new THREE.Vector2();
+        const mouseDown = new THREE.Vector2();
+        const raycaster = new THREE.Raycaster();
+
+        // ------------------------------------------------------------------
+        // Renderer / Scene
+        // ------------------------------------------------------------------
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0xFFFFFF);
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        document.body.appendChild(renderer.domElement);
+
+        const environment    = new RoomEnvironment(renderer);
+        const pmremGenerator = new THREE.PMREMGenerator(renderer);
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xbbbbbb);
+        scene.environment = pmremGenerator.fromScene(environment).texture;
+        scene.add(helper);
+
+        const yellowGeometry = new THREE.SphereGeometry(0.28, 16, 16);
+        const yellowMaterial = new THREE.MeshStandardMaterial({
+            color: 0xFFFF00,
+            emissive: 0x666600,
+            emissiveIntensity: 0.45,
+            flatShading: true
+        });
+        yellowMarker         = new THREE.Mesh(yellowGeometry, yellowMaterial);
+        yellowMarker.visible = false;
+        scene.add(yellowMarker);
+        environment.dispose();
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 2000);
+        camera.position.set(-10, 14, 10);
+
+        const controls  = new OrbitControls(camera, renderer.domElement);
+        controls.damping = 0.2;
+
+        scene.add(new THREE.AmbientLight(0x101030));
+        const directionalLight = new THREE.DirectionalLight(0xFFEEDD);
+        directionalLight.position.set(0, 0.5, 0.5);
+        scene.add(directionalLight);
+
+        init();
+        animate();
+
+        // ------------------------------------------------------------------
+        // Init
+        // ------------------------------------------------------------------
+        async function init() {
+            const gltfLoader = new GLTFLoader();
+            const objLoader  = new OBJLoader();
+
+            objLoader.load('/map.obj', function (gltf) {
+                let levelMesh;
+                gltf.traverse((child) => {
+                console.log(
+                    child.name,
+                    child.type,
+                    child.geometry ? child.geometry.attributes.position.count : ''
+                );
+
+                if (!levelMesh && child.geometry) {
+                    levelMesh = child;
+                }
+                });
+                const levelMat  = new THREE.MeshStandardMaterial({
+                    color:     Color.GROUND,
+                    flatShading: true,
+                    roughness: 1,
+                    metalness: 0
+                });
+                const level = new THREE.Mesh(levelMesh.geometry, levelMat);
+                level.scale.set(0.01, 0.01, 0.01);
+                window.level = level;
+                scene.add(level);
+
+                objLoader.load('model.bot.obj', (bp) => {
+                    try {
+                        botPrototype = bp;
+                        botPrototype.scale.setScalar(0.9);
+                        botPrototype.traverse(c => {
+                            if (c.isMesh) {
+                                c.material      = wireMaterialBot;
+                                c.userData.type = 'bot';
+                            }
+                        });
+
+                        const bot0 = botPrototype.clone();
+                        bot0.position.set(0, 1, 0);
+                        bot0.traverse(c => {
+                            if (c.isMesh) c.userData.type = 'player';
+                        });
+                        players[0] = bot0;
+                        scene.add(bot0);
+                    } catch (e) { console.warn('model.bot.obj no cargado', e); }
+                });
+            }, null);
+
+            helper
+                .setPlayerPosition(new THREE.Vector3(-3.5, 0.5, 5.5))
+                .setTargetPosition(new THREE.Vector3(-3.5, 0.5, 5.5));
+
+            document.addEventListener('pointerdown', onDocumentPointerDown, false);
+            document.addEventListener('pointerup',   onDocumentPointerUp,   false);
+            let isKeydown = false
+            document.addEventListener('keydown', (event)=>{
+                if (event.key.toLowerCase() === 'w') {
+                    
+                    if(players[focus_player]){
+                        
+                        send_action(1, move_actions.forward.action_type);
+                        console.log('W pulsada');
+
+                    }else{
+                        
+                        console.log('no conectado')
+                    }
+
+                }
+                if (event.key.toLowerCase() === 'a') {
+                    
+                    if(players[focus_player] ){
+                        
+                        send_action(1, move_actions.camera_left.action_type, 0.05);
+                        console.log('A pulsada');
+
+                    }
+                    
+
+                }
+                if (event.key.toLowerCase() === 'd') {
+                    
+                    if(players[focus_player] ){
+                        
+                        send_action(1, move_actions.camera_right.action_type, 0.05);
+                        console.log('D pulsada');
+
+                    }
+
+                }
+            }, false)
+            document.addEventListener('mousemove', (event) => {
+
+                if (!players[focus_player]) {
+                    return;
+                }
+
+                if (event.movementX > 0) {
+                    // Derecha
+                    send_action(1, move_actions.camera_right.action_type, 0.05);
+                    console.log('Ratón derecha');
+                } 
+                else if (event.movementX < 0) {
+                    // Izquierda
+                    send_action(1, move_actions.camera_left.action_type, 0.05);
+                    console.log('Ratón izquierda');
+                }
+
+            }, false);
+            document.addEventListener('keyup', (event)=>{
+                if (event.key.toLowerCase() === 'w') {
+                    
+                    if(isKeydown){
+                        isKeydown = false
+                        console.log('W despulsada')
+                        
+                        send_action(1, move_actions.stop_forward.action_type);
+                    }
+                }
+            }, false)
+            window.addEventListener('resize',        onWindowResize,        false);
+        }
+
+        // ------------------------------------------------------------------
+        // Pointer / resize
+        // ------------------------------------------------------------------
+        function onDocumentPointerDown(event) {
+            mouseDown.x =  (event.clientX / window.innerWidth)  * 2 - 1;
+            mouseDown.y = -(event.clientY / window.innerHeight)  * 2 + 1;
+        }
+
+        function onDocumentPointerUp(event) {
+            mouse.x =  (event.clientX / window.innerWidth)  * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight)  * 2 + 1;
+
+            if (Math.abs(mouseDown.x - mouse.x) > 0 || Math.abs(mouseDown.y - mouse.y) > 0) return;
+
+            camera.updateMatrixWorld();
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(navmesh);
+            if (!intersects.length) return;
+
+            targetPosition.copy(intersects[0].point);
+            helper.reset().setPlayerPosition(playerPosition);
+            
+            if (event.metaKey || event.ctrlKey || event.button === 2) {
+                path    = null;
+                groupID = pathfinder.getGroup(ZONE, targetPosition, true);
+                const closestNode = pathfinder.getClosestNode(playerPosition, ZONE, groupID, true);
+                helper.setPlayerPosition(playerPosition.copy(targetPosition));
+                if (closestNode) helper.setNodePosition(closestNode.centroid);
+                return;
+            }
+
+            const targetGroupID     = pathfinder.getGroup(ZONE, targetPosition, true);
+            const closestTargetNode = pathfinder.getClosestNode(targetPosition, ZONE, targetGroupID, true);
+            helper.setTargetPosition(targetPosition);
+            if (closestTargetNode) helper.setNodePosition(closestTargetNode.centroid);
+
+            path = pathfinder.findPath(playerPosition, targetPosition, ZONE, groupID);
+
+            if (path && path.length) {
+                helper.setPath(path);
+            } else {
+                const closestPlayerNode = pathfinder.getClosestNode(playerPosition, ZONE, groupID);
+                const clamped           = new THREE.Vector3();
+                pathfinder.clampStep(playerPosition, targetPosition.clone(), closestPlayerNode, ZONE, groupID, clamped);
+                helper.setStepPosition(clamped);
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // ------------------------------------------------------------------
+        // Render loop
+        // ------------------------------------------------------------------
+        const cameraOffset = new THREE.Vector3(-10, 14, 10); // posición relativa al jugador
+        function animate() {
+            requestAnimationFrame(animate);
+            acc += clock.getDelta();
+            if (acc >= SENSOR_DT) {
+                updateAllSensors();
+                acc = 0;
+            }
+
+            if (players[focus_player]) {
+                const distance = 10;
+                const height = 1;
+
+                const offset = new THREE.Vector3(0, height, distance);
+                offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), players[focus_player].rotation.y);
+
+                const desiredPos = players[focus_player].position.clone().add(offset);
+
+                camera.position.lerp(desiredPos, 0.1);
+                controls.target.copy(players[focus_player].position);
+                controls.update();
+            }
+            renderer.render(scene, camera);
+        }
+
+        // ------------------------------------------------------------------
+        // Sensor update — optimizado
+        // ------------------------------------------------------------------
+        function updateAllSensors() {
+
+        }
+
+        // Regenera el path de un bot concreto hacia el jugador 0
+        function _regenPath(id, path, group) {
+            if (!players[0] || !players[id]) return;
+
+            const playerPos   = players[0].position;
+            const botPos      = players[id].position;
+            const playerGroup = pathfinder.getGroup(ZONE, playerPos, true);
+            if (playerGroup === null || playerGroup === undefined) return;
+
+            
+            if (path && path.length > 0) {
+                botsWaypoints[id] = { path: path, group: group };
+                helper.setPath(path);
+            }
+        }
+
+        // Avanza un bot un paso hacia su siguiente waypoint
+        function _stepBot(id) {
+            if (!botsWaypoints[id] || botsWaypoints[id].path.length === 0) return;
+
+            const bot         = players[id];
+            if (!bot) return;
+
+            const botPos      = bot.position;
+            const waypointPos = botsWaypoints[id].path[0];
+
+            const dx     = waypointPos.x - botPos.x;
+            const dz     = waypointPos.z - botPos.z;
+            const distSq = dx * dx + dz * dz;
+
+            // ¿Llegamos al waypoint?
+            if (distSq <= WAYPOINT_RADIUS_SQ) {
+                botsWaypoints[id].path.shift();
+                return;
+            }
+
+            // Calcular ángulo y enviar acción
+            const target  = normalizeAngle(angleToTarget(botPos.x, botPos.z, waypointPos.x, waypointPos.z) + Math.PI);
+            const current = normalizeAngle(-bot.rotation.y);
+
+            let diff = current - target;
+            if (diff >  Math.PI) diff -= 2 * Math.PI;
+            if (diff < -Math.PI) diff += 2 * Math.PI;
+
+            if (diff > 0.05) {
+                //send_action(id, move_actions.camera_left.action_type);
+            } else if (diff < -0.05) {
+                //send_action(id, move_actions.camera_right.action_type);
+            } else {
+                //send_action(id, move_actions.forward.action_type);
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // API
+        // ------------------------------------------------------------------
+        async function send_action(id_bot, action, data = undefined) {
+            await fetch('/api/action_bot', {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify({ id_bot, state_bot: action, ...data ? {data: data} : {} }),
+            });
+        }
+
+        // ------------------------------------------------------------------
+        // SSE
+        // ------------------------------------------------------------------
+        const sseSource = new EventSource('/api/connect');
+
+        sseSource.onmessage = e => {
+            try {
+                const data = JSON.parse(e.data);
+
+                if(data.type_action === 'main_pj' && data.value_action){
+                    console.log('focus player: ', data)
+                    focus_player = data.id_bot
+                }else if (data.type_action === 'sync' && data.value_action) {
+                    console.log('sync: ', data)
+                    const idBot = Number(data.value_action?.bot);
+                    const bot = !players[idBot] ? botPrototype.clone() : players[idBot];
+                    bot.traverse(c => { if (c.isMesh) c.userData.type = 'bot'; });
+                    
+
+                    if(!players[idBot]){
+  
+                        scene.add(bot);
+                        players[idBot] = bot;
+                    }
+
+                    players[idBot].position.set(
+                        data.value_action.x * 0.01,
+                        0.01,
+                        -data.value_action.y * 0.01
+                    );
+
+                    if (typeof data.value_action.r === 'number') {
+                        players[idBot].rotation.y = -(data.value_action.r / 256) * Math.PI * 2;
+                    }
+
+                    if (idBot === 0) {
+                        // Actualizar posición canónica del jugador 0
+                        playerPosition.copy(players[0].position);
+                        yellowMarker.position.copy(players[0].position);
+                        yellowMarker.visible = true;
+                        helper.setTargetPosition(targetPosition);
+                    } else {
+                        helper.setPlayerPosition(players[idBot].position);
+                    }
+
+                } else if (data.type_action === 'spawn' && data.value_action) {
+                    console.log('spawn: ', data)
+                    const idBot = Number(data.id_bot ?? data.value_action?.bot);
+
+                    const bot = !players[idBot] ? botPrototype.clone() : players[idBot];
+                    bot.traverse(c => { if (c.isMesh) c.userData.type = 'bot'; });
+                    
+
+                    if(!players[idBot]){
+  
+                        scene.add(bot);
+                        players[idBot] = bot;
+                    }
+                    players[idBot].position.set(
+                        data.value_action.x * 0.01,
+                        0.01,
+                        -data.value_action.y * 0.01
+                    );
+                    helper.setPlayerPosition(players[idBot].position);
+                }else if(data.type_action === 'waypoints'){
+                    console.log('¡waypoints recive!: ', data)
+                    _regenPath(data.id_bot, data.value_action.path, data.value_action.group);
+                }else if(data.type_action === 'die'){
+                    console.log('bot is death: ', data.id_bot)
+                }
+                else if(data.type_action === 'patrol_points'){
+                    console.log('patrol_points', data)
+                }
+            } catch (err) {
+                console.error('SSE parse error', err);
+            }
+        };
+
+        sseSource.onerror = err => console.warn('SSE connection error', err);
+
+        // ------------------------------------------------------------------
+        // Helpers matemáticos
+        // ------------------------------------------------------------------
+        function normalizeAngle(a) {
+            return ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+        }
+
+        function angleToTarget(botX, botZ, targetX, targetZ) {
+            return Math.atan2(targetZ - botZ, targetX - botX) - Math.PI / 2;
+        }
+    </script>
+
+    <div class="formulario">
+        <div class="tituloformulario"><span>Conectate a la partida</span></div>
+        <div class="datosformulario">
+            <label>Dirección IP:<br><input type="text" id="ipv4" value="192.168.1.128"></label>
+            <label>Puerto:<br><input type="number" id="puerto" value="8888"></label>
+            <label>Número de bots:<br><input type="number" id="numbots" max="32" value="1" disabled></label>
+            <label>Bots hablan cuando mueren:<br><input type="checkbox" id="botsTalk" checked></label>
+            <label>Dificultad: <span id="difficult_span">0.00</span><br><input type="range" step="0.01" min="0" max="1" value="0.00" id="dificult" oninput="console.log('changes! range'); window.difficult = parseFloat(this.value); document.getElementById('difficult_span').textContent = window.difficult.toFixed(2);"><br> </slide></label>
+        </div>
+    </div>
+
+    <div id="ocultar" style="display:none;">
+        <div id="map2d" style="position:fixed; top:10px; right:10px; z-index:9999;"></div>
+    </div>
+
+    <div id="offset-panel" style="
+        position: fixed; top: 20px; left: 20px; z-index: 9999;
+        background: rgba(0,0,0,0.75); color: white;
+        padding: 12px 16px; border-radius: 10px;
+        font-family: monospace; font-size: 13px;
+        display: flex; flex-direction: column; gap: 8px; min-width: auto;">
+
+        <span style="font-weight:bold; margin-bottom:4px;">Conectar</span>
+        <input id="boton" type="button" value="Conectar" onclick="btnocultar()">
+
+        <div style="display:none">
+            <label>Offset X: <span id="lx">0.00</span>
+                <input id="offsetX" type="range" min="-20" max="20" step="0.1" value="-3.9"
+                    oninput="offsetX = parseFloat(this.value); document.getElementById('lx').textContent = offsetX.toFixed(2);"
+                    style="width:100%; margin-top:4px;">
+            </label>
+        </div>
+        <div style="display:none">
+            <label>Offset Z: <span id="lz">0.00</span>
+            <input id="offsetZ" type="range" min="-20" max="20" step="0.1" value="-1.6"
+                oninput="offsetZ = parseFloat(this.value); document.getElementById('lz').textContent = offsetZ.toFixed(2);"
+                style="width:100%; margin-top:4px;">
+            </label>
+        </div>
+    </div>
+
+    <script src="index.js"></script>
+
+</body>
+</html>
