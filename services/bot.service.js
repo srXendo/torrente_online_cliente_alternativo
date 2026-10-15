@@ -229,12 +229,12 @@ class TargetManager {
             this.#server.close();
         });
         this.#server.on('message', (msg)=>{
-            console.log(`bot recv msg ${this.#number_bot}: `, msg.toString('hex'))
+            //console.log(`bot recv msg ${this.#number_bot}: `, msg.toString('hex'))
             const responses = this.handler_message(msg)
             if(responses){
                 for(let msg_to_server of responses){
                     if(!msg_to_server.is_external){
-                        console.log(`bot send msg ${this.#number_bot}: `, msg_to_server.toString('hex'))
+                        //console.log(`bot send msg ${this.#number_bot}: `, msg_to_server.toString('hex'))
                         this.#server.send(msg_to_server, this.#port_server, this.#ip_server, (err)=>{
                             if(err){
                                 console.error(new Error(err))
@@ -255,6 +255,7 @@ class TargetManager {
     handler_message(msg, rconf) {
         const headers = msg.readUInt16BE(0)
         const timestamp = Date.now() & 0xFFFFFFFF;
+        this.last_msg = msg
         switch (headers) {
             case 0x3f09:
                 this.#server.close(()=>{
@@ -318,7 +319,7 @@ class TargetManager {
                 1: 3f020099cac34001 al mensaje: 8006030099ff0000f7ac6e0001000000
                 ok2_aux.writeUint8(msg.readUint8(3), 4)*/
 
-                //this.arr_actions.push([ ...ok2])// this.process_msg(user_responses, msg, msg.readUInt8(2), msg.readUInt8(3))
+                //this.add_action([ ...ok2])// this.process_msg(user_responses, msg, msg.readUInt8(2), msg.readUInt8(3))
                 
                 return [...user_responses, ...ok2]
                 break;
@@ -478,7 +479,7 @@ class TargetManager {
 
                         chat.writeUInt8(this.#number_bot, 4)
                         if(this.bots_can_talk){
-                            this.arr_actions.push(chat)
+                            this.add_action(chat)
                         }
                     const have_life = msg.readUInt8(10)
                     //console.log(`${this.user_bot} ha sido impactado por: other user. `)
@@ -516,7 +517,7 @@ class TargetManager {
                 pj_response.writeUInt8(this.#number_bot, 4)
 
                 
-                this.arr_actions.push(pj_response)*/
+                this.add_action(pj_response)*/
                 if(msg.readUInt8(0) === 0x37){
                     
                 }
@@ -528,7 +529,7 @@ class TargetManager {
                     /*this.user_bot = Buffer.from(('Bot' + `${this.#number_bot }`.padStart(2, "0")), 'ascii')
                     this.#number_bot = msg.readUInt8(4)*/
                     //this.#number_bot = msg.readUInt8(4)
-                    this.#number_bot = msg.readUInt8(4)
+                    
                     this.bot_helper.send_event(JSON.stringify({ type_action: 'main_pj', value_action: this.#id_bot, id_bot: this.#number_bot }))
                 }
                     //
@@ -589,7 +590,7 @@ class TargetManager {
                         throw new Error(err)
                     }
 
-                    //this.arr_actions.push(pj_response)
+                    //this.add_action(pj_response)
 
                     //this.spawn(that_bot.cords)
                     //const all_players = this.extractAllPlayers(msg)
@@ -665,16 +666,20 @@ class TargetManager {
  
                 
                 responses.push(ping_ce)
-                this.arr_actions.push(this.try_other_spawn())
+                this.add_action(this.try_other_spawn())
 
 
 
                 break;
             case 0x27:
                 break;
-
+            case 0xfa:
+                console.log("¿need new number?: new id:" + msg.readUInt8(4) + " Old:" + this.#number_bot )
+                console.log("¿hex?: " + msg.toString('hex'))
+                this.#number_bot = msg.readUInt8(4)
+                break;
             default:
-                console.error(new Error('action no recognize: ').stack)
+                console.error(new Error('action no recognize: ' + action).stack)
                 break;
         }
 
@@ -852,10 +857,6 @@ class TargetManager {
     }
     move_to(next_pos){
         const now = new Date().getTime()
-        if(now - this.last_time_execute > 200){
-            //this.send_sync()
-            this.last_time_execute = now
-        }
         
         const patrolPos = next_pos;
         if (!patrolPos) return;
@@ -906,14 +907,12 @@ class TargetManager {
 
                 this.forward_move()
 
-            
 
-                setTimeout(()=>{
-                        //this.forward_move_stop()
-                    this.send_sync()
-                }, 20)
+
+
             }
         }
+
 
         return false
     }
@@ -1035,12 +1034,7 @@ class TargetManager {
 
             }
         }
-        const now = new Date().getTime()
-        //console.log('ia_follow_target')
-        if(now - this.last_time_execute > 200){
-            this.send_sync()
-            this.last_time_execute = now
-        }
+
         return false
     }
     refresh_target_selection() {
@@ -1145,14 +1139,14 @@ class TargetManager {
             buffStart.writeUInt8(this.#number_bot, 4)
 
 
-            this.arr_actions.push(buffStart)
+            this.add_action(buffStart, true)
             this.forward_move_stop()
 
 
                 
             
             this.bot_forware_start = true
-            //this.arr_actions.push(buf)
+            //this.add_action(buf)
 
                 
             return [];
@@ -1195,7 +1189,7 @@ class TargetManager {
         row.writeUInt8(this.#number_bot, 4)
         //row.writeUint16LE( Math.floor(Math.random() * 180) , 8)
         row.writeUint8(this.bot_cords.r, 7)
-        //this.arr_actions.push(buf)
+        //this.add_action(buf)
 
 
 
@@ -1232,7 +1226,7 @@ class TargetManager {
         row.writeUInt8(this.#number_bot, 4)
         //row.writeUint16LE( Math.floor(Math.random() * 180) , 8)
         row.writeUint8(this.bot_cords.r, 7)
-        //this.arr_actions.push(buf)
+        //this.add_action(buf)
         return row;
     }
     send_signal_die() {
@@ -1244,7 +1238,7 @@ class TargetManager {
 
         chat.writeUInt8(this.#number_bot, 4)
         if(this.bots_can_talk){
-            this.arr_actions.push(chat)
+            this.add_action(chat)
         }
         this.bot_helper.send_event(JSON.stringify({ type_action: 'die', id_bot: this.#number_bot }))
         // 3f00bd30000c15000d1000017f554004254690571541062da5c5bbb2d5d5
@@ -1268,7 +1262,7 @@ class TargetManager {
 
 
 
-        this.arr_actions.push(pj_setup)
+        this.add_action(pj_setup)
 
     }
     send_signal_drop_gun() {
@@ -1286,7 +1280,7 @@ class TargetManager {
                 drop_gun_to_flor_2.writeFloatLE(this.bot_cords.x, baseOffset);
                 drop_gun_to_flor_2.writeFloatLE(this.bot_cords.z, baseOffset + 4);
                 drop_gun_to_flor_2.writeFloatLE(this.bot_cords.y, baseOffset + 8);
-                this.arr_actions.push(drop_gun_to_flor_2)
+                this.add_action(drop_gun_to_flor_2)
             
             let drop_gun_to_flor = Buffer.from(`3f00f23fce050532dbac9745000000006ef7f9c4`, 'hex')
 
@@ -1295,7 +1289,7 @@ class TargetManager {
             drop_gun_to_flor.writeFloatLE(this.bot_cords.x, baseOffset);
             drop_gun_to_flor.writeFloatLE(this.bot_cords.z, baseOffset + 4);
             drop_gun_to_flor.writeFloatLE(this.bot_cords.y, baseOffset + 8);
-            this.arr_actions.push(drop_gun_to_flor)
+            this.add_action(drop_gun_to_flor)
         }
 
 
@@ -1355,7 +1349,7 @@ class TargetManager {
             row.writeUInt8(this.#number_bot, 4)
             //row.writeUint16LE( Math.floor(Math.random() * 180) , 8)
             row.writeUint8(view, 7)
-            this.arr_actions.push(row)
+            this.add_action(row)
 
 
 
@@ -1400,7 +1394,7 @@ class TargetManager {
         //pj_response.writeUInt8(this.bot_number+1, 4)
 
         //pj_response.writeUInt8(this.#number_bot, 4) //byte ultimo numero de jugadores en partida 0x00
-        //this.arr_actions.push(pj_response)
+        //this.add_action(pj_response)
         //this.bot_helper.send_event(JSON.stringify({type_action: 'spawn', value_action: cords, id_bot: this.#number_bot}))
     }
     extractRespawnXZR(buffer, bot, baseOffset = 8) {
@@ -1435,7 +1429,7 @@ class TargetManager {
         for (let idx = 0; idx < arr.length; idx++) {
             const row = arr[idx]
             if (!row.is_external) {
-                console.log(row)
+                //console.log(row)
                 row.writeUint8( (next_prev + idx) & 0xFF, 2)
 
                 row.writeUint8(count_prev , 3)
@@ -1542,13 +1536,13 @@ class TargetManager {
                 const shot = Buffer.from('3f00d8af01fc120d1403001905','hex')
                 shot.writeUInt8(this.#number_bot, 4)
                 shot.writeUInt8(this.active_target_id ?? 0, 10)
-                this.arr_actions.push(shot)
+                this.add_action(shot)
             }else{
                 const fail_shot = Buffer.from('3f00790e00262602714ea644f91e2143860ed745','hex')
                 const target_shot = this.get_selected_target_cords()
                 fail_shot.writeFloatLE(target_shot.x, 8);
                 fail_shot.writeFloatLE(target_shot.y, 8 + 8);
-                this.arr_actions.push(fail_shot)
+                this.add_action(fail_shot)
             }
             this.can_shot = false
             this.last_time_shot = now
@@ -1570,12 +1564,12 @@ class TargetManager {
             // R (20) - uint8, no float32
             buf.writeUInt8(this.bot_cords.r, 21);
             buf.writeUInt8(this.#number_bot, 4);
-            this.arr_actions.push(buf)
+            this.add_action(buf)
             const row = Buffer.from('3f00720a000abf4cd6ab00f8', 'hex')
             row.writeUInt8(this.#number_bot, 4)
             //row.writeUint16LE( Math.floor(Math.random() * 180) , 8)
             row.writeUint8(this.bot_cords.r, 7)
-            this.arr_actions.push(row)
+            this.add_action(row)
         }
         return
     }
@@ -1583,15 +1577,15 @@ class TargetManager {
 
         /*const buf_forware = Buffer.from('3f008e10000c03','hex')
         buf_forware.writeUInt8(this.#number_bot, 4)
-        this.arr_actions.push(buf_forware)
+        this.add_action(buf_forware)
 
         const buf_sforware = Buffer.from('3f009610000c15','hex')
         buf_sforware.writeUInt8(this.#number_bot, 4)
-        this.arr_actions.push(buf_sforware)*/
+        this.add_action(buf_sforware)*/
 
         this.generarPaqueteBot(this.bot_cords)
 
-        //this.arr_actions.push(sync_pack[1])
+        //this.add_action(sync_pack[1])
         //this.bot_cords = 
         return
     }
@@ -1599,7 +1593,7 @@ class TargetManager {
         const buffStop = Buffer.from('3f00410f000c15', 'hex')
         buffStop.writeUInt8(this.#number_bot, 4)
 
-        this.arr_actions.push(buffStop)
+        this.add_action(buffStop, true)
         this.bot_forware_start = false
         return
     }
@@ -1607,13 +1601,13 @@ class TargetManager {
 
         const sync_pack = this.generate_pack_camera_right(this.bot_cords, diff)
         sync_pack.writeUInt8(this.#number_bot, 4)
-        this.arr_actions.push(sync_pack)
+        this.add_action(sync_pack, true)
         return
     }
     camera_left(diff) {
         const sync_pack = this.generate_pack_camera_left(this.bot_cords, diff)
         sync_pack.writeUInt8(this.#number_bot, 4)
-        this.arr_actions.push(sync_pack)
+        this.add_action(sync_pack, true)
         return
     }
     disconnect() {
@@ -1630,10 +1624,10 @@ class TargetManager {
         const disconnect = Buffer.from('3f001f170102', 'hex')
         const after_disconnect = Buffer.from('3f08f618', 'hex')
         disconnect.writeUint8(this.#number_bot, 4)
-        this.arr_actions.push(disconnect)
-        this.arr_actions.push(after_disconnect)
+        this.add_action(disconnect)
+        this.add_action(after_disconnect)
 
-        //this.arr_actions.push(Buffer.from(`80040100755a000045e88100`, 'hex'))
+        //this.add_action(Buffer.from(`80040100755a000045e88100`, 'hex'))
         
         return [
             disconnect,
@@ -1654,6 +1648,34 @@ class TargetManager {
             }
             
         })
+    }
+    add_action(row, send_now = false){
+        if(send_now){
+            if(row.readUInt8(0) === 0x80){
+                row.writeUInt8((this.last_msg.readUInt8(4)+1)  & 0xff, 5)
+                row.writeUInt8((this.last_msg.readUInt8(5)), 4)
+            }else if(row.readUInt8(0) === 0x3f){
+                row.writeUInt8((this.last_msg.readUInt8(4)+1) & 0xff, 3)
+                row.writeUInt8((this.last_msg.readUInt8(5)), 2)
+            }
+            this.send_inmediate(row)
+        }else{
+            this.arr_actions.push(row)
+        }
+        
+    }
+    send_inmediate(buff){
+
+        //console.log('sended hello client: ', helloClient)
+
+        this.#server.send(buff, this.#port_server, this.#ip_server, (err)=>{
+            if(err){
+                console.error(new Error(err))
+                throw new Error(err.stack)
+            }
+            
+        })
+    
     }
 }
 module.exports = workerData
@@ -1683,30 +1705,33 @@ parentPort.on("message", (msg_worker)=>{
                     case "forward_move":
                         console.log('order forward_move')
                         botService.forward_move()
-                        botService.send_sync()
                         
                     
                     break;
                     case "camera_right":
                         
                         botService.camera_right(data.value)
-                        botService.send_sync()
                     break;
                     case "camera_left":
                         
                         botService.camera_left(data.value)
-                        botService.send_sync()
                     break;
                     case "stop_forward_move":
                         console.log()
                         botService.forward_move_stop()
-                        botService.send_sync()
                     break;                    
                 }
             break;
             default:
                 
                 break;
+
+        }
+        const now = new Date().getTime()
+        if(now - botService.last_time_execute > 60){
+            botService.last_time_execute  = now
+            //botService.send_sync()
+            botService.send_sync()
         }
     }catch(err){
         console.error(new Error(err.stack))
