@@ -171,7 +171,7 @@ class publicApi {
       'content-type': 'text/plain; charset=utf-8',
       ":status": 200,
     }
-    const pathmodel = path.join(__dirname, './../public/model.bot.obj');
+    const pathmodel = path.join(__dirname, './../public/model.bot.glb');
     const model = fs.readFileSync(pathmodel);
     stream.respond(response)
     stream.write(model)
