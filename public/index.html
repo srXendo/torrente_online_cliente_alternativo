@@ -59,7 +59,7 @@
             model.rotation.y = Math.PI; // corrige la orientación del modelo
             model.traverse(c => {
                 if (c.isMesh) {
-                    c.material = wireMaterialBot;
+                    // c.material = wireMaterialBot;  // <- quitado, así se conservan las texturas del GLB
                     c.userData.type = 'bot';
                     c.frustumCulled = false;
                 }
